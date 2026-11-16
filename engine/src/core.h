@@ -258,7 +258,7 @@
     // current etnaviv driver implementation uses uncompatible Mesa GLSL compiler
     // it produce unimplemented TRUNC/ARL instructions instead of F2I
     // so we can't use joints indexing in the shader (see MESH_SKINNING)
-    #ifndef _OS_GCW0
+    #if !defined(_OS_GCW0) && !defined(_OS_NANO7)
         #define MERGE_MODELS
     #endif
     #define MERGE_SPRITES

@@ -543,6 +543,12 @@
 #endif
 
 
+#ifdef _OS_NANO7
+static int nanoPassId = 0;
+#define NANO_QUIET_LOG(...)
+#else
+#define NANO_QUIET_LOG LOG
+#endif
 namespace GAPI {
 
     using namespace Core;
@@ -611,6 +617,9 @@ namespace GAPI {
     };
 
     struct Shader {
+    #ifdef _OS_NANO7
+        char nanoTag[40];
+    #endif
     #ifdef FFP
         void init(Core::Pass pass, int type, int *def, int defCount) {}
         void deinit() {}
@@ -629,6 +638,9 @@ namespace GAPI {
 
         void init(Pass pass, int type, int *def, int defCount) {
             const char *source;
+        #ifdef _OS_NANO7
+            nanoPassId = (int)pass;
+        #endif
             switch (pass) {
                 case Core::passCompose : source = SHADER_COMPOSE; break;
                 case Core::passShadow  : source = SHADER_SHADOW;  break;
@@ -769,9 +781,16 @@ namespace GAPI {
                 GLuint obj = glCreateShader(type[i]);
                 glShaderSource(obj, 4, code[i], NULL);
                 glCompileShader(obj);
+            #ifdef LARA_DUMP_SHADERS   // host_ref: write every shader source to $LARA_DUMP_SHADERS for NanoOS compiler tests
+                if (getenv("LARA_DUMP_SHADERS")) { static int dumpN = 0; char fn[512]; snprintf(fn, sizeof fn, "%s/%03d_%s.glsl", getenv("LARA_DUMP_SHADERS"), dumpN++, i == 0 ? "vs" : "fs");
+                  FILE *df = fopen(fn, "wb"); if (df) { for (int k = 0; k < 4; k++) fputs(code[i][k], df); fclose(df); } }
+            #endif
 
                 glGetShaderInfoLog(obj, sizeof(info), NULL, info);
-                if (info[0] && strlen(info) > 8) LOG("! shader: %s\n", info);
+                if (info[0] && strlen(info) > 8) { NANO_QUIET_LOG("! shader: %s\n", info); }
+            #ifdef _OS_NANO7
+                { GLint ok = 0; glGetShaderiv(obj, GL_COMPILE_STATUS, &ok); if (!ok) LOG("!CF p%d %s: %.60s\n", nanoPassId, i == 0 ? "vs" : "fs", info); }
+            #endif
 
                 glAttachShader(ID, obj);
                 glDeleteShader(obj);
@@ -783,8 +802,22 @@ namespace GAPI {
             glLinkProgram(ID);
 
             glGetProgramInfoLog(ID, sizeof(info), NULL, info);
-            if (info[0] && strlen(info) > 8) LOG("! program: %s\n", info);
+            if (info[0] && strlen(info) > 8) { NANO_QUIET_LOG("! program: %s\n", info); }
 
+        #ifdef _OS_NANO7
+            { const char *k = strstr(defines, "TYPE_"); if (!k) k = strstr(defines, "SKY_"); if (!k) k = strstr(defines, "FILTER_"); if (!k) k = "PASS";
+              int n = 0; while (k[n] && k[n] != '\n' && n < 15) { nanoTag[n] = k[n]; ++n; } nanoTag[n] = 0; snprintf(nanoTag + n, sizeof(nanoTag) - n, " p%d%s%s", nanoPassId, strstr(defines, "ALPHA_TEST") ? " AT" : "", strstr(defines, "UNDERWATER") ? " UW" : ""); }
+            if (checkLink() && strstr(info, "software")) {
+                const char *k = strstr(defines, "TYPE_"); if (!k) k = strstr(defines, "SKY_"); if (!k) k = strstr(defines, "FILTER_");
+                char tok[16]; int n = 0; if (k) while (k[n] && k[n] != '\n' && n < 15) { tok[n] = k[n]; ++n; } tok[n] = 0;
+                LOG("!SW p%d %s\n", nanoPassId, tok);
+            }
+            if (!checkLink()) {
+                const char *k = strstr(defines, "TYPE_"); if (!k) k = strstr(defines, "SKY_"); if (!k) k = strstr(defines, "FILTER_");
+                char tok[16]; int n = 0; if (k) while (k[n] && k[n] != '\n' && n < 15) { tok[n] = k[n]; ++n; } tok[n] = 0;
+                LOG("!LF p%d %s%s: %.60s\n", nanoPassId, tok, strstr(defines, "UNDERWATER") ? " UW" : "", info);
+            }
+        #endif
             return checkLink();
         }
     
@@ -839,6 +872,9 @@ namespace GAPI {
         void validate() {
             if (rebind) {
                 glUseProgram(ID);
+            #if defined(_OS_NANO7) && defined(LARA_DEBUG_PROGRAMS)
+                { static int reported = 0; if (glGetError() == GL_INVALID_OPERATION && reported < 12) { ++reported; LOG("!UP id %u %s\n", (unsigned)ID, nanoTag); } }
+            #endif
                 rebind = false;
             }
 
@@ -895,7 +931,12 @@ namespace GAPI {
         uint32     opt;
         GLenum     target;
 
-        Texture(int width, int height, int depth, uint32 opt) : ID(0), width(width), height(height), depth(depth), origWidth(width), origHeight(height), origDepth(depth), fmt(FMT_RGBA), opt(opt) {}
+        Texture(int width, int height, int depth, uint32 opt) : ID(0), width(width), height(height), depth(depth), origWidth(width), origHeight(height), origDepth(depth), fmt(FMT_RGBA), opt(opt) {
+        #ifdef _OS_NANO7
+            opt &= ~OPT_CUBEMAP; // NanoOS GL2: no cube maps (2D proxy only)
+            this->opt = opt;
+        #endif
+        }
 
         void init(void *data) {
             ASSERT((opt & OPT_PROXY) == 0);
@@ -1024,6 +1065,9 @@ namespace GAPI {
 
             if (Core::active.textures[sampler] != this) {
                 Core::active.textures[sampler] = this;
+            #ifdef _OS_NANO7
+                if (sampler >= 2) return; // MBX exposes two texture units
+            #endif
             #ifdef FFP
                 if (sampler != sDiffuse) {
                     return;
@@ -1038,6 +1082,9 @@ namespace GAPI {
         void unbind(int sampler) {
             if (Core::active.textures[sampler]) {
                 Core::active.textures[sampler] = NULL;
+            #ifdef _OS_NANO7
+                if (sampler >= 2) return;
+            #endif
             #ifdef FFP
                 if (sampler != sDiffuse) {
                     return;

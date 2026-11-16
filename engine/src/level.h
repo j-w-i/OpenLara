@@ -2590,11 +2590,24 @@ struct Level : IGame {
     }
 
     void renderOpaque(RoomDesc *roomsList, int roomsCount) {
+    #ifdef _OS_NANO7
+        extern uint32_t gPhase[16]; extern uint32_t gl2_prof[8];
+        uint32_t t0 = nano_app_usec(); uint32_t v0 = gl2_prof[5], d0 = gl2_prof[4], s0 = gl2_prof[0], g0 = gl2_prof[3];
+    #endif
         renderRooms(roomsList, roomsCount, 0);
+    #ifdef _OS_NANO7
+        uint32_t t1 = nano_app_usec(); gPhase[7] += t1 - t0; gPhase[8] += gl2_prof[5] - v0; gPhase[9] += gl2_prof[4] - d0; gPhase[14] += gl2_prof[0] - s0; gPhase[15] += gl2_prof[3] - g0;
+        uint32_t v1 = gl2_prof[5], d1 = gl2_prof[4];
+    #endif
         renderEntities(0);
+    #ifdef _OS_NANO7
+        gPhase[10] += gl2_prof[5] - v1; gPhase[11] += gl2_prof[4] - d1; v1 = gl2_prof[5]; d1 = gl2_prof[4];
+    #endif
         if (Core::pass != Core::passShadow && skyIsVisible) {
             renderSky();
         }
+    #ifdef _OS_NANO7
+    #endif
     }
 
     void renderTransparent(RoomDesc *roomsList, int roomsCount) {
@@ -2618,6 +2631,13 @@ struct Level : IGame {
 
     virtual void renderView(int roomIndex, bool water, bool showUI, int roomsCount = 0, RoomDesc *roomsList = NULL) {
         PROFILE_MARKER("VIEW");
+    #ifdef _OS_NANO7
+        extern uint32_t gPhase[16]; extern uint32_t gl2_prof[8];
+        uint32_t tp = nano_app_usec();
+        #define NPH(i) do { uint32_t tn = nano_app_usec(); gPhase[i] += tn - tp; tp = tn; } while (0)
+    #else
+        #define NPH(i)
+    #endif
 
         if (water && waterCache)
             waterCache->reset();
@@ -2657,6 +2677,7 @@ struct Level : IGame {
                 getVisibleRooms(roomsList, roomsCount, TR::NO_ROOM, roomIndex, vec4(-1.0f, -1.0f, 1.0f, 1.0f), water);
         }
 
+        NPH(0);
         if (water && waterCache) {
             for (int i = 0; i < roomsCount; i++)
                 waterCache->setVisible(roomsList[i].index);
@@ -2695,10 +2716,13 @@ struct Level : IGame {
             setupBinding();
         }
 
+        NPH(1);
         prepareRooms(roomsList, roomsCount);
-
+        NPH(2);
         renderOpaque(roomsList, roomsCount);
+        NPH(3);
         renderTransparent(roomsList, roomsCount);
+        NPH(4);
 
         if (camera->isUnderwater())
             renderAdditive(roomsList, roomsCount);
@@ -2723,6 +2747,7 @@ struct Level : IGame {
 
         if (!camera->isUnderwater())
             renderAdditive(roomsList, roomsCount);
+        NPH(5);
     
         Core::setFog(FOG_NONE);
 
@@ -2739,6 +2764,7 @@ struct Level : IGame {
         if (showUI) {
             renderUI();
         }
+        NPH(6);
 
         Core::pass = pass;
     }

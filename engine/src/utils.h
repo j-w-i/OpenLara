@@ -55,6 +55,12 @@
     #endif
 #endif
 
+#ifdef _OS_NANO7
+    extern "C" void lara_log(const char *fmt, ...);
+    #undef LOG
+    #define LOG(...) lara_log(__VA_ARGS__)
+#endif
+
 #ifdef _OS_PSV
     #undef LOG
     #define LOG(...) psvDebugScreenPrintf(__VA_ARGS__)
