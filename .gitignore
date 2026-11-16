@@ -1,0 +1,15 @@
+build/
+data/
+DATA/
+*.PHD
+*.phd
+*.PSX
+*.psx
+*.SAT
+*.sat
+*.TR2
+*.tr2
+*.ogg
+*.mp3
+*.wav
+.DS_Store

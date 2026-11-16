@@ -1,27 +1,30 @@
-# OpenLara
-Classic Tomb Raider open-source engine
+# OpenLara for iPod Nano 7 (NanoOS)
 
-[WebGL build with demo level](http://xproger.info/projects/OpenLara/)
+Port of Timur "XProger" Gagiev's **OpenLara** (Tomb Raider 1 engine, BSD 2-Clause) to the **iPod Nano 7** (`S5L8740` / PowerVR MBX Lite) built against the canonical **NanoOS** kernel and Application SDK.
 
-[Standalone version](https://github.com/XProger/OpenLara/releases/tag/latest)
+## Upstream Attribution & Revision Selection (Phase 1)
 
-[Roadmap](https://github.com/XProger/OpenLara/issues/353)
+- **Upstream Repository:** `https://github.com/XProger/OpenLara`
+- **Selected Revision:** `3b268ca` (`master`)
+- **License:** BSD 2-Clause (see `LICENSE`)
+- **Why `3b268ca` was selected:**
+  - **Genuine GLES 2.0 backend (`_GAPI_GLES2`):** `src/gapi/gl.h` includes explicit GLES 2.0 support and low-end embedded shader options (`OPT_VLIGHTPROJ`, `OPT_VLIGHTVEC`, `OPT_SHADOW_ONETAP`) tailored for mobile/embedded GPUs.
+  - **Zero C++ STL runtime in core:** The core engine (`src/*.h`) compiles cleanly with freestanding `arm-none-eabi-g++ -fno-exceptions -fno-rtti` and only requires basic C libc/math/stdio primitives (`malloc`, `free`, `fopen`, `fread`, `fseek`, `ftell`, `fclose`, `sinf`/`cosf`/`sqrtf`/`atan2f`, etc.).
+  - **Memory-efficient options:** Supports `USE_ATLAS_RGBA16` (16-bit texture atlas), configurable `SHADOW_TEX_SIZE`, and `Core::Settings` quality toggles to fit within the Nano 7's ~22.4 MiB application heap.
+  - **Stability fixes:** Includes upstream fixes for camera matrix NaNs (`cea6576`), enemy pathfinding heap overflow (`7a80d8f`), and stream bounds checking (`0a52e5a`).
 
-[![License](https://img.shields.io/badge/License-BSD%202--Clause-orange.svg)](https://opensource.org/licenses/BSD-2-Clause)  
+## Game Assets (Not Included)
 
-## Links
-[![Twitter](https://badgen.net/badge/icon/twitter?icon=twitter&label)](https://twitter.com/XProger_san)
-[![Discord](https://badgen.net/badge/icon/discord?icon=discord&label)](https://discord.gg/EF8JaQB)
-[![Telegram](https://badgen.net/badge/icon/telegram?icon=telegram&label)](https://t.me/openlara)
-* [YouTube channel](https://www.youtube.com/c/TimurGagiev)
-* [Tomb Raider Forums thread](http://www.tombraiderforums.com/showthread.php?t=216618)
+Proprietary Tomb Raider game data is **not** included in this repository. Place your original Tomb Raider 1 level files (e.g., `DATA/GYM.PHD` or `DATA/LEVEL1.PHD`) in `/Volumes/iPod/Apps/Data/OpenLara/DATA/`.
 
-## Screenshots
-![Waterfall](http://xproger.info/projects/OpenLara/shots/waterfall.jpg)
-![Double-aim](http://xproger.info/projects/OpenLara/shots/multi-aim.jpg)
-![Caustics](http://xproger.info/projects/OpenLara/shots/caustics.jpg)
-![Cutscene](http://xproger.info/projects/OpenLara/shots/cut1.jpg)
-![Cistern](http://xproger.info/projects/OpenLara/shots/flipmap.jpg)
-![Opera](http://xproger.info/projects/OpenLara/shots/tr2_opera.jpg)
-![Unwater](http://xproger.info/projects/OpenLara/shots/tr2_unwater1.jpg)
-![Temple](http://xproger.info/projects/OpenLara/shots/tr3_temple.jpg)
+## Build
+
+```sh
+# Build against NanoOS SDK
+make -C /path/to/NanoOS app APP_DIR=/path/to/openlara-nano7
+
+# Or from this directory
+make NANOOS_DIR=/path/to/NanoOS
+```
+
+Output executable: `build/game.bin` (`NGM1` image linked at `0x0b000000`).
