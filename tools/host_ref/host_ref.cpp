@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
     Core::settings.detail.shadows  = Core::Settings::LOW;
     Core::settings.detail.water    = Core::Settings::LOW;
     Core::settings.detail.lighting = Core::Settings::LOW;
-    Core::settings.detail.filter   = Core::Settings::LOW;
+    Core::settings.detail.filter   = (Core::Settings::Quality)(getenv("HOST_FILTER") ? atoi(getenv("HOST_FILTER")) : 0);   // as LARA_FILTER
     Core::settings.detail.stereo   = Core::Settings::STEREO_OFF;
     Game::init((char *)"DATA/LEVEL2.PHD");
     // HOST_WALK=1: after the fixed frames, replay src/walk_script.h like the LARA_WALK device

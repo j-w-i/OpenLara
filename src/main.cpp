@@ -84,6 +84,14 @@ void osCacheWrite(Stream *stream) { if (stream) stream->callback(NULL, stream->u
 void osReadSlot(Stream *stream) { if (stream) stream->callback(NULL, stream->userData); }
 void osWriteSlot(Stream *stream) { if (stream) stream->callback(NULL, stream->userData); }
 
+// Texture filtering: 0 LOW (nearest), 1 MEDIUM (bilinear + trilinear mipmaps), 2 HIGH (+ anisotropy, n/a)
+#ifndef LARA_FILTER
+#ifdef LARA_BENCH
+#define LARA_FILTER 0   /* bench: matches the stored LOW reference frames */
+#else
+#define LARA_FILTER 1   /* playable: bilinear, free on the MBX (run546) */
+#endif
+#endif
 extern "C" int nano_example_main(const struct nanoos_api *api) {
     if (nano_app_init(api) != 0) return 1;
     int mount_rc = openlara_fs_init();
@@ -138,7 +146,7 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
         Core::settings.detail.shadows   = Core::Settings::LOW;
         Core::settings.detail.water     = Core::Settings::LOW;
         Core::settings.detail.lighting  = Core::Settings::LOW;
-        Core::settings.detail.filter    = Core::Settings::LOW;
+        Core::settings.detail.filter    = (Core::Settings::Quality)LARA_FILTER;
         Core::settings.detail.stereo    = Core::Settings::STEREO_OFF;
 
         gl2std_set_clock(nano_app_usec);
@@ -282,6 +290,8 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
             rword(n); rword(n ? (uint32_t)(sum / n) : 0u); rword(n ? ft[n / 2] : 0u); rword(n ? ft[n * 9 / 10] : 0u); rword(n ? ft[n * 99 / 100] : 0u); rword(n ? ft[n - 1] : 0u);
             rword(walk_err); rword(gl2_egl_recoveries() - rec0);
             { extern uint32_t gl2_spec_builds, gl2_spec_hits; rtext("\nSPEC builds hits "); rword(gl2_spec_builds); rword(gl2_spec_hits); }
+            { const struct nanoos_api *ap = nano_app_api(); rtext("\nFASYNC mode spans words wait_us waits off fallback maxwait ");
+              if (ap && NGAME_API_TABLE(ap) >= 24 && ap->mbx_fifo_async_info) { const uint32_t *fa = ap->mbx_fifo_async_info(); for (int i = 0; i < 24; ++i) rword(fa[i]); } else rtext("unsupported"); }
             uint32_t b[5] = {0,0,0,0,0}; for (uint32_t i = 0; i < n; ++i) b[ft[i] < 16700u ? 0 : ft[i] < 25000u ? 1 : ft[i] < 33400u ? 2 : ft[i] < 50000u ? 3 : 4]++;
 #ifdef LARA_WALK_SHOTS
             rtext("\nSHOTS addr count w h "); rword((uint32_t)(uintptr_t)shots); rword(nshots); rword((uint32_t)Core::width); rword((uint32_t)Core::height);
@@ -336,7 +346,7 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
     Core::settings.detail.shadows   = Core::Settings::LOW;
     Core::settings.detail.water     = Core::Settings::LOW;
     Core::settings.detail.lighting  = Core::Settings::LOW;
-    Core::settings.detail.filter    = Core::Settings::LOW;
+    Core::settings.detail.filter    = (Core::Settings::Quality)LARA_FILTER;
     Core::settings.detail.stereo    = Core::Settings::STEREO_OFF;
 #ifndef LARA_DEMO_LEVEL
 #define LARA_DEMO_LEVEL "DATA/LEVEL2.PHD"

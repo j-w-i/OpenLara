@@ -112,7 +112,9 @@ void loadSettings(Stream *stream, void *userData) {
     Core::setVSync(Core::settings.detail.vsync != 0);
 
     #if defined(_GAPI_SW) || defined(_GAPI_GU) || defined(_OS_NANO7)
+        #if !defined(_OS_NANO7)   // Nano 7: the launcher picks texture filtering (LARA_FILTER), the MBX TSP filters natively
         Core::settings.detail.filter   = Core::Settings::LOW;
+        #endif
         Core::settings.detail.lighting = Core::Settings::LOW;
         Core::settings.detail.shadows  = Core::Settings::LOW;
         Core::settings.detail.water    = Core::Settings::LOW;
