@@ -102,11 +102,16 @@ void osWriteSlot(Stream *stream) { if (stream) stream->callback(NULL, stream->us
 #endif
 #endif
 #ifndef LARA_SHADOWS
-#define LARA_SHADOWS 0
+#ifdef LARA_BENCH
+#define LARA_SHADOWS 0    /* bench: blob shadows, deterministic */
+#else
+#define LARA_SHADOWS -1   /* playable: the in-game Options > Detail > Shadows setting (MEDIUM = shadow map, opt-in) */
+#endif
 #endif
 #ifndef LARA_WATER
 #define LARA_WATER 0
 #endif
+uint32_t nanoShadowProf[4];   /* level.h: shadow-map update us/count, receiver pass us/count */
 int nano7_detail[3] = { LARA_LIGHTING, LARA_SHADOWS, LARA_WATER };
 extern "C" int nano_example_main(const struct nanoos_api *api) {
     if (nano_app_init(api) != 0) return 1;
@@ -319,6 +324,7 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
 #ifdef LARA_WALK_SHOTS
             rtext("\nSHOTS addr count w h "); rword((uint32_t)(uintptr_t)shots); rword(nshots); rword((uint32_t)Core::width); rword((uint32_t)Core::height);
 #endif
+            rtext("\nSHPROF update_us updates recv_us recvs "); for (int i = 0; i < 4; ++i) rword(nanoShadowProf[i]);
             rtext("\nWALKHIST <16.7 <25 <33.4 <50 >=50ms "); for (int i = 0; i < 5; ++i) rword(b[i]);
             rflush();
         }

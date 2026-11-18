@@ -273,6 +273,11 @@
     #define SHADOW_TEX_SIZE      256
 #elif defined(_OS_PSV)
     #define SHADOW_TEX_SIZE      1024
+#elif defined(_OS_NANO7)
+    #ifndef NANO_SHADOW_SIZE
+    #define NANO_SHADOW_SIZE     128
+    #endif
+    #define SHADOW_TEX_SIZE      NANO_SHADOW_SIZE   // RGBA colour-depth map (level.h renderShadowView)
 #else
     #define SHADOW_TEX_SIZE      2048
 #endif
@@ -379,7 +384,11 @@ namespace Core {
     #endif
     } support;
 
+#ifdef _OS_NANO7
+#define SETTINGS_VERSION 8   /* Nano: one reset so OpenLara's saved desktop default (shadows HIGH) does not opt into shadow maps */
+#else
 #define SETTINGS_VERSION 7
+#endif
 #define SETTINGS_READING 0xFF
 
     struct Settings {
@@ -420,6 +429,8 @@ namespace Core {
             void setShadows(Quality value) {
             #if defined(_GAPI_SW) || defined(_GAPI_GU)
                 shadows = LOW;
+            #elif defined(_OS_NANO7)
+                shadows = value > MEDIUM ? MEDIUM : value;   // LOW = blob, MEDIUM/HIGH = shadow map (level.h NANO_SHADOW_*)
             #else
                 shadows = value;
             #endif
@@ -690,7 +701,8 @@ struct MeshRange {
     E( OPT_AMBIENT     ) \
     E( OPT_SHADOW      ) \
     E( OPT_CONTACT     ) \
-    E( OPT_CAUSTICS    )
+    E( OPT_CAUSTICS    ) \
+    E( NANO_SHADOW_RECV )
 
 enum AttribType   { SHADER_ATTRIBS(DECL_ENUM)  aMAX };
 enum SamplerType  { SHADER_SAMPLERS(DECL_ENUM) sMAX };
@@ -975,6 +987,9 @@ namespace Core {
         settings.detail.setLighting (Core::Settings::HIGH);
         settings.detail.setShadows  (Core::Settings::HIGH);
         settings.detail.setWater    (Core::Settings::HIGH);
+    #ifdef _OS_NANO7
+        settings.detail.setShadows  (Core::Settings::LOW);   // shadow maps are opt-in (Options > Detail > Shadows): ~35 ms/frame vs 21
+    #endif
         settings.detail.simple       = false;
         settings.detail.vsync        = true;
         settings.detail.stereo       = Settings::STEREO_OFF;

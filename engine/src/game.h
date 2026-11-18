@@ -118,11 +118,12 @@ void loadSettings(Stream *stream, void *userData) {
         Core::settings.detail.water    = Core::Settings::LOW;
     #endif
     #if defined(_OS_NANO7)
-        // Nano 7: the launcher (src/main.cpp, tools/host_ref) owns lighting/shadows/water (0 LOW,
-        // 1 MEDIUM, 2 HIGH); applied after the saved settings so they cannot override it.
+        // Nano 7: the launcher (src/main.cpp, tools/host_ref) owns lighting/water (0 LOW, 1 MEDIUM,
+        // 2 HIGH), applied after the saved settings so they cannot override it. Shadows follow the
+        // saved/menu setting unless the launcher forces them (nano7_detail[1] >= 0).
         extern int nano7_detail[3];
         Core::settings.detail.lighting = (Core::Settings::Quality)nano7_detail[0];
-        Core::settings.detail.shadows  = (Core::Settings::Quality)nano7_detail[1];
+        if (nano7_detail[1] >= 0) Core::settings.detail.setShadows((Core::Settings::Quality)nano7_detail[1]);
         Core::settings.detail.water    = (Core::Settings::Quality)nano7_detail[2];
     #endif
 

@@ -703,6 +703,9 @@ namespace GAPI {
             #if !defined(_OS_GCW0) 
                 strcat(defines, "#define VERT_CAUSTICS\n");
             #endif
+            #ifdef _OS_NANO7
+                strcat(defines, "#define NANO_SHADOW\n");     // shaders/shadow.glsl: colour-depth caster / combiner receiver
+            #endif
             #if defined(_OS_NANO7) && !defined(LARA_EXACT_LIGHT)
                 strcat(defines, "#define NANO_FAST_LIGHT\n");   // shaders/compose.glsl: cheaper per-vertex dynamic lights
             #endif

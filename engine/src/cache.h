@@ -158,10 +158,12 @@ struct ShaderCache {
                 if (pass == Core::passCompose) {
                     if (Core::settings.detail.lighting > Core::Settings::MEDIUM && (type == Shader::ENTITY))
                         SD_ADD(OPT_AMBIENT);
+                #ifndef _OS_NANO7   // Nano: shadows are a separate receiver pass (level.h renderNanoShadowReceivers)
                     if (Core::settings.detail.shadows  > Core::Settings::LOW && (type == Shader::ENTITY || type == Shader::ROOM))
                         SD_ADD(OPT_SHADOW);
                     if (Core::settings.detail.shadows  > Core::Settings::MEDIUM && (type == Shader::ROOM))
                         SD_ADD(OPT_CONTACT);
+                #endif
                     if (Core::settings.detail.water    > Core::Settings::MEDIUM && (type == Shader::ENTITY || type == Shader::ROOM) && (fx & FX_UNDERWATER))
                         SD_ADD(OPT_CAUSTICS);
                 }

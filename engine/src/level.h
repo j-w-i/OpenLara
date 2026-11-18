@@ -35,6 +35,37 @@ extern Array<SaveSlot> saveSlots;
 extern SaveResult saveResult;
 extern int loadSlot;
 
+#ifdef _OS_NANO7
+/* Nano shadow-map light box (world units; 1024 = one block) and receiver compare: see renderShadowView,
+ * renderNanoShadowReceivers and shaders/shadow.glsl. Depth is 0..1 over NANO_SHADOW_DEPTH; the combiner
+ * compare ramps from lit to shadowed over a quarter of that, starting (0.25 - NANO_SHADOW_OFFSET) of
+ * the depth range in front of the caster. */
+#ifndef NANO_SHADOW_RADIUS
+#define NANO_SHADOW_RADIUS 512.0f
+#endif
+#ifndef NANO_SHADOW_BACK
+#define NANO_SHADOW_BACK   512.0f
+#endif
+#ifndef NANO_SHADOW_DEPTH
+#define NANO_SHADOW_DEPTH  1024.0f
+#endif
+#ifndef NANO_SHADOW_OFFSET
+#define NANO_SHADOW_OFFSET 0.27f
+#endif
+#ifndef NANO_SHADOW_EVERY
+#define NANO_SHADOW_EVERY  2       /* render the shadow map every N frames (each update is a GPU sync point) */
+#endif
+#ifndef NANO_SHADOW_ROOMS
+#define NANO_SHADOW_ROOMS  1       /* 1: receivers in the player's room only; 0: every room overlapping the light box */
+#endif
+#ifndef NANO_SHADOW_TILT
+#define NANO_SHADOW_TILT   1.0f    /* light direction += (0, TILT, 0): halfway to overhead for a side light */
+#endif
+#ifndef NANO_SHADOW_KEEP
+#define NANO_SHADOW_KEEP   0.5f    /* darkening: shadowed pixels keep 1 - 0.5 = 50% of their colour */
+#endif
+#endif
+
 struct Level : IGame {
 
     TR::Level   level;
@@ -86,6 +117,15 @@ struct Level : IGame {
     vec4 levelFogParams;
 
     mat4 mLightProj[2];
+#ifdef _OS_NANO7
+    /* Real shadow map on the MBX Lite (shaders/shadow.glsl NANO_SHADOW): an orthographic box from
+     * the main light around the player; casters store linear light depth as colour, room receivers
+     * redo the depth compare in the combiner and multiply the scene. */
+    Shader *nanoRecvShader;
+    mat4    nanoLightProj;
+    vec3    nanoShadowPos;
+    bool    nanoShadowValid;
+#endif
 
 // IGame implementation ========
     virtual void loadLevel(TR::LevelID id) {
@@ -366,6 +406,9 @@ struct Level : IGame {
         delete shadow[0];
         delete shadow[1];
         shadow[0] = shadow[1] = NULL;
+    #ifdef _OS_NANO7
+        nanoShadowValid = false;
+    #endif
     #ifndef FFP
         if (Core::settings.detail.shadows > Core::Settings::LOW) {
             if (level.isTitle())
@@ -982,6 +1025,10 @@ struct Level : IGame {
         initEntities();
 
         shadow[0] = shadow[1] = NULL;
+    #ifdef _OS_NANO7
+        nanoRecvShader  = NULL;
+        nanoShadowValid = false;
+    #endif
         scaleTex     = NULL;
         camera       = NULL;
         ambientCache = NULL;
@@ -1069,6 +1116,9 @@ struct Level : IGame {
         for (int i = 0; i < level.entitiesCount; i++)
             delete (Controller*)level.entities[i].controller;
 
+        #ifdef _OS_NANO7
+        delete nanoRecvShader;
+    #endif
         delete shadow[0];
         delete shadow[1];
         delete scaleTex;
@@ -2475,6 +2525,9 @@ struct Level : IGame {
                 TR::Entity &entity = level.entities[i];
                 Controller *controller = (Controller*)entity.controller;
                 if (controller && controller->flags.rendered && controller->getEntity().castShadow())
+                #ifdef _OS_NANO7
+                    if (!(nanoShadowValid && shadow[0] && controller == (Controller*)players[0]))   // shadow map covers the player
+                #endif
                     controller->renderShadow(mesh);
             }
             Core::setBlendMode(bmNone);
@@ -2599,6 +2652,54 @@ struct Level : IGame {
                 getVisibleRooms(roomsList, roomsCount, to, p.roomIndex, clipPort, water, count + 1);
         }
     }
+
+#ifdef _OS_NANO7
+    void renderNanoShadowReceivers(RoomDesc *roomsList, int roomsCount) {
+        if (!nanoShadowValid || !shadow[0] || Core::pass != Core::passCompose) return;
+        uint32_t tr0 = nano_app_usec();
+        if (!nanoRecvShader) {
+            int def[2] = { SD_TYPE_SPRITE + Shader::ROOM, SD_NANO_SHADOW_RECV };
+            nanoRecvShader = new Shader(Core::passShadow, Shader::ROOM, def, 2);
+        }
+        mat4 oldLightProj = Core::mLightProj;
+        Core::mLightProj = nanoLightProj;
+        nanoRecvShader->setup();
+        Core::mLightProj = oldLightProj;
+        // receiver depth offset (x) and darkening of shadowed pixels (y): see shaders/shadow.glsl
+        nanoRecvShader->setParam(uMaterial, vec4(NANO_SHADOW_OFFSET, NANO_SHADOW_KEEP, 0.0f, 0.0f));
+        shadow[0]->bind(sDiffuse);
+        Core::setBlendMode(bmMult);
+        Core::setDepthWrite(false);
+        Core::setFog(FOG_NONE);
+        Core::setScissor(Core::viewportDef);
+
+        Basis basis;
+        basis.identity();
+        float reach = NANO_SHADOW_RADIUS * 1.5f;
+        for (int i = 0; i < roomsCount; i++) {
+            int roomIndex = roomsList[i].index;
+        #if NANO_SHADOW_ROOMS == 1
+            if (roomIndex != player->getRoomIndex()) continue;   // receivers: the player's room only (a redraw of every nearby room cost ~5 ms)
+        #endif
+            MeshBuilder::RoomRange &range = mesh->rooms[roomIndex];
+            if (!range.geometry[0].count) continue;
+            const TR::Room &room = level.rooms[roomIndex];
+            // room AABB (x/z from the sector grid, y from the room's vertical extent) against the light box
+            float x0 = float(room.info.x), z0 = float(room.info.z);
+            float x1 = x0 + room.xSectors * 1024.0f, z1 = z0 + room.zSectors * 1024.0f;
+            if (nanoShadowPos.x + reach < x0 || nanoShadowPos.x - reach > x1 ||
+                nanoShadowPos.z + reach < z0 || nanoShadowPos.z - reach > z1) continue;
+            basis.pos = room.getOffset();
+            Core::setBasis(&basis, 1);
+            Core::mModel.setPos(basis.pos);
+            mesh->transparent = 0;
+            mesh->renderRoomGeometry(roomIndex);
+        }
+        Core::setDepthWrite(true);
+        Core::setBlendMode(bmNone);
+        extern uint32_t nanoShadowProf[4]; nanoShadowProf[2] += nano_app_usec() - tr0; ++nanoShadowProf[3];
+    }
+#endif
 
     void renderOpaque(RoomDesc *roomsList, int roomsCount) {
     #ifdef _OS_NANO7
@@ -2731,6 +2832,9 @@ struct Level : IGame {
         prepareRooms(roomsList, roomsCount);
         NPH(2);
         renderOpaque(roomsList, roomsCount);
+    #ifdef _OS_NANO7
+        if (water) renderNanoShadowReceivers(roomsList, roomsCount);   // main view only (renderView(.., water = true, ..))
+    #endif
         NPH(3);
         renderTransparent(roomsList, roomsCount);
         NPH(4);
@@ -2812,9 +2916,30 @@ struct Level : IGame {
         float znear = camera->znear;
         float zfar  = player->mainLightColor.w * 1.5f;
 
+    #ifdef _OS_NANO7
+        (void)znear; (void)zfar;
+        {   // orthographic: UVs and depth stay linear in world space, so per-vertex values interpolate exactly
+            vec3 dir = pos - player->mainLightPos;
+            float len = dir.length();
+            dir = len > 1.0f ? dir * (1.0f / len) : vec3(0.0f, 1.0f, 0.0f);
+        #ifdef NANO_SHADOW_TILT
+            // bias toward straight down (TR's y axis points down): a side light on the same level as
+            // the player throws the shadow onto distant walls, while players read it under the feet
+            dir.y += NANO_SHADOW_TILT;
+            dir = dir.normal();
+        #endif
+            vec3 eye = pos - dir * NANO_SHADOW_BACK;
+            vec3 up  = fabsf(dir.y) > 0.9f ? vec3(0.0f, 0.0f, 1.0f) : vec3(0.0f, -1.0f, 0.0f);
+            Core::mViewInv = mat4(eye, pos, up);
+            Core::mView    = Core::mViewInv.inverseOrtho();
+            Core::mProj    = GAPI::ortho(-NANO_SHADOW_RADIUS, NANO_SHADOW_RADIUS, -NANO_SHADOW_RADIUS, NANO_SHADOW_RADIUS, 0.0f, NANO_SHADOW_DEPTH);
+            nanoShadowPos  = pos;
+        }
+    #else
         Core::mViewInv = mat4(player->mainLightPos, pos, vec3(0, -1, 0));
         Core::mView    = Core::mViewInv.inverseOrtho();
         Core::mProj    = GAPI::perspective(90.0f, 1.0f, znear, zfar, 0.0f);
+    #endif
 
         mat4 &m = mLightProj[player->camera->cameraIndex];
         m = Core::mProj * Core::mView;
@@ -2844,12 +2969,35 @@ struct Level : IGame {
         m = bias * m;
 
         Core::mLightProj = m;
+    #ifdef _OS_NANO7
+        nanoLightProj   = m;
+        nanoShadowValid = true;
+    #endif
 
         camera->frustum->pos = Core::viewPos.xyz();
         camera->frustum->calcPlanes(Core::mViewProj);
 
         setup();
+    #ifdef _OS_NANO7
+        // casters: only shadow-casting entities inside the light box (renderView would draw every
+        // entity visible from the light through portals, mostly far outside the 128x128 map)
+        (void)roomIndex;
+        mesh->dynBegin();
+        mesh->transparent = 0;
+        atlasObjects->bind(sDiffuse);
+        for (int i = 0; i < level.entitiesCount; i++) {
+            TR::Entity &e = level.entities[i];
+            if (!e.controller || e.modelIndex <= 0 || !e.castShadow()) continue;
+            Controller *c = (Controller*)e.controller;
+            vec3 d = c->getPos() - nanoShadowPos;
+            if (fabsf(d.x) > NANO_SHADOW_RADIUS || fabsf(d.y) > NANO_SHADOW_RADIUS || fabsf(d.z) > NANO_SHADOW_RADIUS) continue;
+
+            renderEntity(e);
+        }
+        mesh->dynEnd();
+    #else
         renderView(roomIndex, false, false);
+    #endif
     }
 /*
     void renderShadowEntity(int index, Controller *controller, Controller *player) {
@@ -3292,7 +3440,18 @@ struct Level : IGame {
     #ifndef FFP
         if (shadow[0] && players[0]) {
             player = players[0];
+        #ifdef _OS_NANO7
+            {   // the light box map can be reused for a few frames (each update waits for the queued frame)
+                static int nanoShadowTick = 0;
+                if (!nanoShadowValid || (nanoShadowTick++ % NANO_SHADOW_EVERY) == 0) {
+                    extern uint32_t nanoShadowProf[4]; uint32_t t0 = nano_app_usec();
+                    renderShadows(player->getRoomIndex(), shadow[0]);
+                    nanoShadowProf[0] += nano_app_usec() - t0; ++nanoShadowProf[1];
+                }
+            }
+        #else
             renderShadows(player->getRoomIndex(), shadow[0]);
+        #endif
 
             if (players[1]) {
                 if (!shadow[1]) {
