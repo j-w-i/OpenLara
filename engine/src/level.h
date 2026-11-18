@@ -122,6 +122,7 @@ struct Level : IGame {
      * the main light around the player; casters store linear light depth as colour, room receivers
      * redo the depth compare in the combiner and multiply the scene. */
     Shader *nanoRecvShader;
+    Shader *nanoBgShader;
     mat4    nanoLightProj;
     vec3    nanoShadowPos;
     bool    nanoShadowValid;
@@ -1027,6 +1028,7 @@ struct Level : IGame {
         shadow[0] = shadow[1] = NULL;
     #ifdef _OS_NANO7
         nanoRecvShader  = NULL;
+        nanoBgShader    = NULL;
         nanoShadowValid = false;
     #endif
         scaleTex     = NULL;
@@ -1118,6 +1120,7 @@ struct Level : IGame {
 
         #ifdef _OS_NANO7
         delete nanoRecvShader;
+        delete nanoBgShader;
     #endif
         delete shadow[0];
         delete shadow[1];
@@ -2977,8 +2980,28 @@ struct Level : IGame {
         camera->frustum->pos = Core::viewPos.xyz();
         camera->frustum->calcPlanes(Core::mViewProj);
 
-        setup();
     #ifdef _OS_NANO7
+        {   // Map background = far (1.0). The clear colour does not reach an FBO on the MBX: measured
+            // on the device, the cleared map read a stale grey (0x21..0x46, "nearer than Lara"), which
+            // put the whole light box in shadow. Draw the background through the caster shader instead:
+            // a clip-space quad (uViewProj = identity, w = 32767) with cpos.z = 1, no depth write.
+            if (!nanoBgShader) {
+                int def[1] = { SD_TYPE_SPRITE + Shader::ROOM };
+                nanoBgShader = new Shader(Core::passShadow, Shader::ROOM, def, 1);
+            }
+            mat4 ident; ident.identity();
+            nanoBgShader->setup();
+            nanoBgShader->setParam(uViewProj, ident);
+            Basis bg; bg.identity(); bg.pos = vec3(0.0f, 0.0f, 1.0f); bg.w = 32767.0f;
+            Core::setBasis(&bg, 1);
+            Core::setBlendMode(bmNone);
+            Core::setDepthWrite(false);
+            Core::setCullMode(cmNone);
+            mesh->renderQuad();
+            Core::setCullMode(cmFront);
+            Core::setDepthWrite(true);
+        }
+        setup();
         // casters: only shadow-casting entities inside the light box (renderView would draw every
         // entity visible from the light through portals, mostly far outside the 128x128 map)
         (void)roomIndex;

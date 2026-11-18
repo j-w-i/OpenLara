@@ -111,6 +111,11 @@ void osWriteSlot(Stream *stream) { if (stream) stream->callback(NULL, stream->us
 #ifndef LARA_WATER
 #define LARA_WATER 0
 #endif
+extern "C" { extern uint32_t gl2_nano_prof[12]; extern uint32_t gl2_nano_alias_state;
+#ifdef GL2_NANO_FBO_DEBUG
+extern uint32_t gl2_nano_fdbg[8],gl2_nano_fgrid[129];
+#endif
+}
 uint32_t nanoShadowProf[4];   /* level.h: shadow-map update us/count, receiver pass us/count */
 int nano7_detail[3] = { LARA_LIGHTING, LARA_SHADOWS, LARA_WATER };
 extern "C" int nano_example_main(const struct nanoos_api *api) {
@@ -325,6 +330,12 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
             rtext("\nSHOTS addr count w h "); rword((uint32_t)(uintptr_t)shots); rword(nshots); rword((uint32_t)Core::width); rword((uint32_t)Core::height);
 #endif
             rtext("\nSHPROF update_us updates recv_us recvs "); for (int i = 0; i < 4; ++i) rword(nanoShadowProf[i]);
+            { rtext("\nNPROF waitwin n waitfbo n store n fboend n present n fbobegin n "); for (int i = 0; i < 12; ++i) rword(gl2_nano_prof[i]); rtext("ALIAS "); rword(gl2_nano_alias_state);
+#ifdef GL2_NANO_FBO_DEBUG
+            rtext("\nFDBG stores bad last max min corner centre "); for (int i = 0; i < 7; ++i) rword(gl2_nano_fdbg[i]);
+            for (int i = 0; i < 129; ++i) { if (i % 4 == 0) rtext(i == 64 ? "\nFGRID --\nFGRID " : "\nFGRID "); rword(gl2_nano_fgrid[i]); }
+#endif
+            }
             rtext("\nWALKHIST <16.7 <25 <33.4 <50 >=50ms "); for (int i = 0; i < 5; ++i) rword(b[i]);
             rflush();
         }
