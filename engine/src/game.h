@@ -111,13 +111,19 @@ void loadSettings(Stream *stream, void *userData) {
     Core::settings.version = SETTINGS_VERSION;
     Core::setVSync(Core::settings.detail.vsync != 0);
 
-    #if defined(_GAPI_SW) || defined(_GAPI_GU) || defined(_OS_NANO7)
-        #if !defined(_OS_NANO7)   // Nano 7: the launcher picks texture filtering (LARA_FILTER), the MBX TSP filters natively
+    #if defined(_GAPI_SW) || defined(_GAPI_GU)
         Core::settings.detail.filter   = Core::Settings::LOW;
-        #endif
         Core::settings.detail.lighting = Core::Settings::LOW;
         Core::settings.detail.shadows  = Core::Settings::LOW;
         Core::settings.detail.water    = Core::Settings::LOW;
+    #endif
+    #if defined(_OS_NANO7)
+        // Nano 7: the launcher (src/main.cpp, tools/host_ref) owns lighting/shadows/water (0 LOW,
+        // 1 MEDIUM, 2 HIGH); applied after the saved settings so they cannot override it.
+        extern int nano7_detail[3];
+        Core::settings.detail.lighting = (Core::Settings::Quality)nano7_detail[0];
+        Core::settings.detail.shadows  = (Core::Settings::Quality)nano7_detail[1];
+        Core::settings.detail.water    = (Core::Settings::Quality)nano7_detail[2];
     #endif
 
     shaderCache = new ShaderCache();
@@ -368,5 +374,9 @@ namespace Game {
         return false;
     }
 }
+
+#ifdef _OS_NANO7
+#include "nanotouch.h"
+#endif
 
 #endif

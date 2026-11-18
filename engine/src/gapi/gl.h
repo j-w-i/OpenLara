@@ -703,6 +703,9 @@ namespace GAPI {
             #if !defined(_OS_GCW0) 
                 strcat(defines, "#define VERT_CAUSTICS\n");
             #endif
+            #if defined(_OS_NANO7) && !defined(LARA_EXACT_LIGHT)
+                strcat(defines, "#define NANO_FAST_LIGHT\n");   // shaders/compose.glsl: cheaper per-vertex dynamic lights
+            #endif
 
             #if defined(_OS_RPI) || defined(_OS_CLOVER) || defined(_OS_GCW0) || (defined (__SDL2__) && defined(_GAPI_GLES))
                 strcat(defines, "#define OPT_VLIGHTPROJ\n");

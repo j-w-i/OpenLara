@@ -1349,6 +1349,33 @@ struct MeshBuilder {
         vCount += 4;
     }
 
+    // solid-colour quad with free corners (clockwise or counter-clockwise), used by the touch HUD
+    void addDynQuad(int x0, int y0, int x1, int y1, int x2, int y2, int x3, int y3, uint32 color) {
+        dynCheck(1 * 6);
+
+        Index *indices   = dynIndices;
+        Vertex *vertices = dynVertices;
+        int &iCount      = dynICount;
+        int &vCount      = dynVCount;
+
+        addQuad(indices, iCount, vCount, 0, vertices, NULL, false, false);
+
+        vertices[vCount + 0].coord = short4( int16(x0), int16(y0), 0, 1 );
+        vertices[vCount + 1].coord = short4( int16(x1), int16(y1), 0, 1 );
+        vertices[vCount + 2].coord = short4( int16(x2), int16(y2), 0, 1 );
+        vertices[vCount + 3].coord = short4( int16(x3), int16(y3), 0, 1 );
+
+        for (int i = 0; i < 4; i++) {
+            Vertex &v = vertices[vCount + i];
+            v.normal  = short4( 0, 0, 0, 0 );
+            v.light.value = color;
+            short2 uv = whiteSprite.texCoordAtlas[i];
+            v.texCoord = short4( uv.x, uv.y, 32767, 32767 );
+        }
+
+        vCount += 4;
+    }
+
     void addDynFrame(const vec2 &pos, const vec2 &size, uint32 color1, uint32 color2) {
         dynCheck(4 * 6);
 

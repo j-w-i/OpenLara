@@ -41,6 +41,7 @@ static void save_ppm(const char *path, int w, int h) {
     fclose(f);
 }
 
+int nano7_detail[3];   // lighting, shadows, water (game.h applies them after the saved settings)
 int main(int argc, char **argv) {
     const char *out = argc > 1 ? argv[1] : ".";
     int frames = argc > 2 ? atoi(argv[2]) : 6;
@@ -63,9 +64,13 @@ int main(int argc, char **argv) {
     Core::width = W; Core::height = H;
     contentDir[0] = cacheDir[0] = saveDir[0] = 0;
     // same detail settings as the Nano bench and playable build (src/main.cpp)
-    Core::settings.detail.shadows  = Core::Settings::LOW;
-    Core::settings.detail.water    = Core::Settings::LOW;
-    Core::settings.detail.lighting = Core::Settings::LOW;
+    // HOST_SHADOWS / HOST_WATER / HOST_LIGHTING (0 LOW, 1 MEDIUM, 2 HIGH): higher-tier references
+    nano7AmbientMode = getenv("HOST_AMBIENT_MODE") ? atoi(getenv("HOST_AMBIENT_MODE")) : 1;   // 0 shader, 1 exact CPU downsample, 2 estimate
+    nano7AmbientCompare = getenv("HOST_AMBIENT_CMP") && atoi(getenv("HOST_AMBIENT_CMP"));
+    if (getenv("HOST_AMBIENT_SCALE")) nano7AmbientScale = (float)atof(getenv("HOST_AMBIENT_SCALE"));
+    nano7_detail[0] = getenv("HOST_LIGHTING") ? atoi(getenv("HOST_LIGHTING")) : 0;
+    nano7_detail[1] = getenv("HOST_SHADOWS")  ? atoi(getenv("HOST_SHADOWS"))  : 0;
+    nano7_detail[2] = getenv("HOST_WATER")    ? atoi(getenv("HOST_WATER"))    : 0;
     Core::settings.detail.filter   = (Core::Settings::Quality)(getenv("HOST_FILTER") ? atoi(getenv("HOST_FILTER")) : 0);   // as LARA_FILTER
     Core::settings.detail.stereo   = Core::Settings::STEREO_OFF;
     Game::init((char *)"DATA/LEVEL2.PHD");

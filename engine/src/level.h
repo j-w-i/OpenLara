@@ -27,6 +27,10 @@
 
 extern void loadLevelAsync(Stream *stream, void *userData);
 
+#ifdef _OS_NANO7
+namespace NanoTouch { void render(bool inInventory); }   // nanotouch.h
+#endif
+
 extern Array<SaveSlot> saveSlots;
 extern SaveResult saveResult;
 extern int loadSlot;
@@ -650,6 +654,13 @@ struct Level : IGame {
                 Core::setTarget(targets[i * stride], NULL, RT_CLEAR_COLOR | RT_CLEAR_DEPTH | RT_STORE_COLOR);
             }
             renderView(rIndex, false, false);
+            #ifdef _OS_NANO7
+            if (nano7EnvReadback && !(targets[0]->opt & OPT_CUBEMAP)) {   // AmbientCache CPU downsample
+                Texture *t = targets[i * stride];
+                Core::validateRenderState();
+                glReadPixels(0, 0, t->width, t->height, GL_RGBA, GL_UNSIGNED_BYTE, nano7EnvReadback + i * t->width * t->height * 4);
+            }
+            #endif
         }
 
         #ifdef _GAPI_D3D8
@@ -3522,6 +3533,10 @@ struct Level : IGame {
             UI::renderSubs();
         }
 
+        #ifdef _OS_NANO7
+            if (!level.isCutsceneLevel() && !camera->spectator) NanoTouch::render(false);
+        #endif
+
         UI::end();
 
         Core::popLights();
@@ -3568,6 +3583,9 @@ struct Level : IGame {
         } else {
             UI::renderSubs();
         }
+        #ifdef _OS_NANO7
+            NanoTouch::render(true);
+        #endif
         UI::end();
 
         Core::popLights();

@@ -184,9 +184,22 @@ varying vec4 vTexCoord; // xy - atlas coords, zw - trapezoidal correction
 
 			#endif
 
+			#ifdef NANO_FAST_LIGHT
+				// iPod nano (MBX vertex programs cost per instruction per vertex):
+				att.y = dot(lv1, lv1); att.z = dot(lv2, lv2); att.w = dot(lv3, lv3);
+				#ifdef TYPE_ENTITY
+					// exact: dot(n, normalize(v)) == dot(n, v) * inversesqrt(dot(v, v)), one shared multiply
+					att.x = dot(lv0, lv0);
+					lum = vec4(dot(vNormal.xyz, lv0), dot(vNormal.xyz, lv1), dot(vNormal.xyz, lv2), dot(vNormal.xyz, lv3)) * inversesqrt(att);
+				#else
+					// rooms/sprites: dynamic lights 1..3 keep their distance falloff, no facing term
+					lum.y = 1.0; lum.z = 1.0; lum.w = 1.0;
+				#endif
+			#else
 			lum.y = dot(vNormal.xyz, normalize(lv1)); att.y = dot(lv1, lv1);
 			lum.z = dot(vNormal.xyz, normalize(lv2)); att.z = dot(lv2, lv2);
 			lum.w = dot(vNormal.xyz, normalize(lv3)); att.w = dot(lv3, lv3);
+			#endif
 			vec4 light = max(vec4(0.0), lum) * max(vec4(0.0), vec4(1.0) - att);
 
 			#if (defined(TYPE_ENTITY) || defined(TYPE_ROOM)) && defined(UNDERWATER) && defined(VERT_CAUSTICS)

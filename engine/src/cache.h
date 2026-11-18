@@ -204,6 +204,18 @@ struct ShaderCache {
     }
 };
 
+#ifdef _OS_NANO7
+static uint8 *nano7EnvReadback = NULL;   // Level::renderEnvironment copies each face here when set
+/* How AmbientCache fills a sector's ambient cube:
+ *   0 OpenLara's own path (6 environment renders + FILTER_DOWNSAMPLE passes + 6 readbacks)
+ *   1 the same 6 GPU environment renders, read back, downsampled on the CPU (exact; ~0.1-0.2 s/sector)
+ *   2 estimate from the room's faces on the CPU, no GPU work (default: < 1 ms/sector) */
+static int    nano7AmbientMode = 2;
+static bool   nano7AmbientCompare = false;   // host_ref: print estimate next to the exact cube
+static float  nano7AmbientScale = 0.95f;      // estimate brightness: best fit to the exact cubes along the walk (host_ref, 147 sectors)
+static int    nano7AmbientFace[6] = { 0, 1, 2, 3, 4, 5 };   // estimate direction (+x,-x,+y,-y,+z,-z) -> cube slot
+#endif
+
 struct AmbientCache {
     IGame     *game;
     TR::Level *level;
@@ -239,6 +251,10 @@ struct AmbientCache {
         items = new Cube[sectors];
         memset(items, 0, sizeof(Cube) * sectors);
     // init downsample textures
+        for (int j = 0; j < 6 * 4; j++) textures[j] = NULL;
+        #ifdef _OS_NANO7
+        if (nano7AmbientMode == 2) return;   // the estimate renders nothing: no 24 render targets (texture slots are scarce)
+        #endif
         for (int j = 0; j < 6; j++)
             for (int i = 0; i < 4; i++)
                 textures[j * 4 + i] = new Texture(64 >> (i << 1), 64 >> (i << 1), 1, FMT_RGBA, OPT_TARGET | OPT_NEAREST);
@@ -262,6 +278,139 @@ struct AmbientCache {
         task.cube->status = Cube::WAIT;
     }
 
+#ifdef _OS_NANO7
+    /* Nano 7: the six 64x64 environment faces are read back right after each is rendered
+     * (Level::renderEnvironment) and reduced on the CPU with exactly FILTER_DOWNSAMPLE's
+     * arithmetic: three levels (64 -> 16 -> 4 -> 1) of luminance-weighted 4x4 averages, each
+     * stored as 8-bit RGBA like the shader's render targets. The NanoOS fragment compiler has no
+     * loops/offset taps/division, and this avoids 18 tiny render passes + 6 GPU syncs. */
+    static vec4 downsampleCPU(const uint8 *face) {
+        static uint8 a[64 * 64 * 4], b[16 * 16 * 4];
+        for (int i = 0; i < 64 * 64 * 4; i++) a[i] = face[i];
+        uint8 *src = a, *dst = b;
+        for (int size = 16; size >= 1; size >>= 2) {
+            int s4 = size * 4;
+            for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++) {
+                    float r = 0, g = 0, bl = 0, w = 0;
+                    for (int j = 0; j < 4; j++)
+                        for (int i = 0; i < 4; i++) {
+                            const uint8 *p = src + ((y * 4 + j) * s4 + x * 4 + i) * 4;
+                            float pr = p[0] * (1.0f / 255.0f), pg = p[1] * (1.0f / 255.0f), pb = p[2] * (1.0f / 255.0f);
+                            float pw = pr * 0.299f + pg * 0.587f + pb * 0.114f;
+                            r += pr * pw; g += pg * pw; bl += pb * pw; w += pw;
+                        }
+                    float k = w > 0.0f ? 1.0f / w : 0.0f;
+                    uint8 *o = dst + (y * size + x) * 4;
+                    o[0] = (uint8)clamp(r * k * 255.0f + 0.5f, 0.0f, 255.0f);
+                    o[1] = (uint8)clamp(g * k * 255.0f + 0.5f, 0.0f, 255.0f);
+                    o[2] = (uint8)clamp(bl * k * 255.0f + 0.5f, 0.0f, 255.0f);
+                    o[3] = 255;
+                }
+            uint8 *t = src; src = dst; dst = t;
+        }
+        return vec4(src[0], src[1], src[2], src[3]) * (1.0f / 255.0f);
+    }
+#endif
+
+#ifdef _OS_NANO7
+    /* Average colour of every object texture (opaque texels), for the estimate. Built once. */
+    vec3 *texAvg = NULL;
+    void buildTexAvg() {
+        TR::Level *l = level;
+        texAvg = new vec3[l->objectTexturesCount];
+        static AtlasTile tile;
+        for (int i = 0; i < l->objectTexturesCount; i++) {
+            TR::TextureInfo &t = l->objectTextures[i];
+            short4 uv = t.getMinMax();
+            uv.z++; uv.w++;
+            l->fillObjectTexture(&tile, uv, &t);
+            float r = 0, g = 0, b = 0; int n = 0;
+            for (int y = uv.y; y < uv.w; y++)
+                for (int x = uv.x; x < uv.z; x++) {
+                    AtlasColor c = tile.color[(y & 255) * 256 + (x & 255)];
+                #ifdef USE_ATLAS_RGBA16
+                    if (!c.a) continue;
+                    r += c.r * (1.0f / 31.0f); g += c.g * (1.0f / 31.0f); b += c.b * (1.0f / 31.0f);
+                #else
+                    if (!c.a) continue;
+                    r += c.r * (1.0f / 255.0f); g += c.g * (1.0f / 255.0f); b += c.b * (1.0f / 255.0f);
+                #endif
+                    n++;
+                }
+            texAvg[i] = n ? vec3(r / n, g / n, b / n) : vec3(0.5f);
+        }
+    }
+
+    /* Ambient cube estimate (nano7AmbientMode 2): what the six 64x64 environment views plus the
+     * luminance-weighted downsample would average, from the room's own faces. Each face is
+     * sampled at 2x2 (quads) or 3 (triangles) points with colour = texture average x baked vertex
+     * light; a sample counts towards the cube face its direction leaves through, weighted by the
+     * cube-map pixels it covers (solid angle / cos^3 of the angle to that face's axis) and by its
+     * luminance, as the downsample weights texels. No occlusion, other rooms or static meshes. */
+    void estimateAmbient(int roomIndex, const vec3 &pos, vec4 *colors) {
+        if (!texAvg) buildTexAvg();
+        TR::Room &r = level->rooms[roomIndex];
+        TR::Room::Data &d = r.data;
+        float acc[6][4];
+        for (int j = 0; j < 6; j++) acc[j][0] = acc[j][1] = acc[j][2] = acc[j][3] = 0.0f;
+        static const float st[4][2] = { {0.25f, 0.25f}, {0.75f, 0.25f}, {0.75f, 0.75f}, {0.25f, 0.75f} };
+        static const float bc[3][3] = { {0.6667f, 0.1667f, 0.1667f}, {0.1667f, 0.6667f, 0.1667f}, {0.1667f, 0.1667f, 0.6667f} };
+        for (int i = 0; i < d.fCount; i++) {
+            TR::Face &f = d.faces[i];
+            int nv = f.triangle ? 3 : 4;
+            vec3 v[4], li[4];
+            for (int k = 0; k < nv; k++) {
+                TR::Room::Data::Vertex &rv = d.vertices[f.vertices[k]];
+                v[k]  = vec3(float(r.info.x + rv.pos.x), float(rv.pos.y), float(r.info.z + rv.pos.z));
+                li[k] = vec3(rv.color.r, rv.color.g, rv.color.b) * (1.0f / 255.0f);
+            }
+            vec3 nrm = vec3(float(f.normal.x), float(f.normal.y), float(f.normal.z));
+            float nl = nrm.length();
+            if (nl <= 0.0f) continue;
+            nrm = nrm * (1.0f / nl);
+            float area = nv == 4 ? 0.5f * (v[2] - v[0]).cross(v[3] - v[1]).length()
+                                 : 0.5f * (v[1] - v[0]).cross(v[2] - v[0]).length();
+            if (area <= 0.0f) continue;
+            int tex = f.flags.texture;
+            vec3 tc = (tex >= 0 && tex < level->objectTexturesCount) ? texAvg[tex] : vec3(0.5f);
+            int ns = nv == 4 ? 4 : 3;
+            float as = area / ns;
+            for (int s = 0; s < ns; s++) {
+                vec3 p, l;
+                if (nv == 4) {
+                    float u = st[s][0], w = st[s][1];
+                    p = (v[0] * (1 - u) + v[1] * u) * (1 - w) + (v[3] * (1 - u) + v[2] * u) * w;
+                    l = (li[0] * (1 - u) + li[1] * u) * (1 - w) + (li[3] * (1 - u) + li[2] * u) * w;
+                } else {
+                    p = v[0] * bc[s][0] + v[1] * bc[s][1] + v[2] * bc[s][2];
+                    l = li[0] * bc[s][0] + li[1] * bc[s][1] + li[2] * bc[s][2];
+                }
+                vec3 dv = p - pos;
+                float r2 = dv.dot(dv);
+                if (r2 < 1.0f) continue;
+                float rl = sqrtf(r2);
+                vec3 dir = dv * (1.0f / rl);
+                float facing = -nrm.dot(dir);
+                if (facing <= 0.0f) { if (!f.flags.doubleSided) continue; facing = -facing; }
+                float ax = fabsf(dir.x), ay = fabsf(dir.y), az = fabsf(dir.z);
+                int j; float c;
+                if (ax >= ay && ax >= az) { j = dir.x > 0 ? 0 : 1; c = ax; }
+                else if (ay >= az)        { j = dir.y > 0 ? 2 : 3; c = ay; }
+                else                      { j = dir.z > 0 ? 4 : 5; c = az; }
+                vec3 col = vec3(tc.x * l.x, tc.y * l.y, tc.z * l.z) * nano7AmbientScale;
+                float lum = col.x * 0.299f + col.y * 0.587f + col.z * 0.114f;
+                float wgt = as * facing / r2 / (c * c * c) * lum;
+                acc[j][0] += col.x * wgt; acc[j][1] += col.y * wgt; acc[j][2] += col.z * wgt; acc[j][3] += wgt;
+            }
+        }
+        for (int j = 0; j < 6; j++) {
+            float k = acc[j][3] > 0.0f ? 1.0f / acc[j][3] : 0.0f;
+            colors[nano7AmbientFace[j]] = vec4(acc[j][0] * k, acc[j][1] * k, acc[j][2] * k, 1.0f);
+        }
+    }
+#endif
+
     void renderAmbient(int room, int sector, vec4 *colors) {
         PROFILE_MARKER("PASS_AMBIENT");
                 
@@ -273,6 +422,31 @@ struct AmbientCache {
                         float((sector % r.zSectors) * 1024 + 512 + r.info.z));
 
         Core::setClearColor(vec4(0, 0, 0, 1));
+
+        #ifdef _OS_NANO7
+        vec4 est[6];
+        if (nano7AmbientMode == 2 || nano7AmbientCompare) estimateAmbient(room, pos, est);
+        if (nano7AmbientMode == 2 && !nano7AmbientCompare) {
+            for (int j = 0; j < 6; j++) colors[j] = est[j];
+            Core::setClearColor(vec4(0, 0, 0, 0));
+            return;
+        }
+        if (nano7AmbientMode >= 1) {
+            static uint8 faces[6 * 64 * 64 * 4];
+            nano7EnvReadback = faces;
+            game->renderEnvironment(room, pos, textures, 4);
+            nano7EnvReadback = NULL;
+            for (int j = 0; j < 6; j++)
+                colors[j] = downsampleCPU(faces + j * 64 * 64 * 4);
+            if (nano7AmbientCompare) {
+                printf("AMB room %d", room);
+                for (int j = 0; j < 6; j++) printf(" | %.3f %.3f %.3f ~ %.3f %.3f %.3f", colors[j].x, colors[j].y, colors[j].z, est[j].x, est[j].y, est[j].z);
+                printf("\n");
+            }
+            Core::setClearColor(vec4(0, 0, 0, 0));
+            return;
+        }
+        #endif
 
         // first pass - render environment from position (room geometry & static meshes)
         game->renderEnvironment(room, pos, textures, 4);

@@ -13,3 +13,4 @@ DATA/
 *.mp3
 *.wav
 .DS_Store
+__pycache__/

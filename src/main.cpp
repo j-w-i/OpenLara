@@ -92,6 +92,22 @@ void osWriteSlot(Stream *stream) { if (stream) stream->callback(NULL, stream->us
 #define LARA_FILTER 1   /* playable: bilinear, free on the MBX (run546) */
 #endif
 #endif
+/* Detail tiers (0 LOW, 1 MEDIUM, 2 HIGH) for lighting, shadows, water; game.h applies them after
+ * the saved settings. Build with -DLARA_LIGHTING=/-DLARA_SHADOWS=/-DLARA_WATER= to raise one. */
+#ifndef LARA_LIGHTING
+#ifdef LARA_BENCH
+#define LARA_LIGHTING 0   /* bench: matches the stored LOW reference frames */
+#else
+#define LARA_LIGHTING 2   /* playable: HIGH = ambient cube per entity, estimated on the CPU (walk: 22.8 -> 24.5 ms vs LOW, run-fixlow/run-fixhigh) */
+#endif
+#endif
+#ifndef LARA_SHADOWS
+#define LARA_SHADOWS 0
+#endif
+#ifndef LARA_WATER
+#define LARA_WATER 0
+#endif
+int nano7_detail[3] = { LARA_LIGHTING, LARA_SHADOWS, LARA_WATER };
 extern "C" int nano_example_main(const struct nanoos_api *api) {
     if (nano_app_init(api) != 0) return 1;
     int mount_rc = openlara_fs_init();
@@ -228,6 +244,9 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
                 ta = nano_app_usec();
                 eglSwapBuffers(dpy, sfc);
                 t_swp += nano_app_usec() - ta;
+#ifdef LARA_SHOT_BENCH
+                if (f == LARA_SHOT_BENCH) nano_flight_screenshot();   /* compare with NanoEmu q1 / ANGLE ref4 */
+#endif
             }
         }
         uint32_t t_rnd = nano_app_usec() - t_rnd0;
@@ -265,6 +284,10 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
                     if (shots && (f + 1) % 60 == 0) glReadPixels(0, 0, Core::width, Core::height, GL_RGBA, GL_UNSIGNED_BYTE, shots + (size_t)(nshots++) * Core::width * Core::height * 4u);
 #endif
                     tq = nano_app_usec(); eglSwapBuffers(dpy, sfc); w_swp += nano_app_usec() - tq;
+#ifdef LARA_SHOT_FRAME
+                    /* device screenshot (flight recorder, read with hwbridge/pull_flight.py after the run) */
+                    if (f == LARA_SHOT_FRAME) nano_flight_screenshot();
+#endif
                 }
                 uint32_t now = nano_app_usec(), dt = now - tprev; tprev = now;
                 ft[n++] = dt; segsum += dt; if (dt > segmax) segmax = dt;
@@ -341,8 +364,8 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
     (void)mount_rc;
 
     // Playable build: same detail settings as the measured bench (LARA_BENCH), straight into
-    // the level, in landscape (LARA_LANDSCAPE, home button on the right). Touch uses OpenLara's own zones (left third: move stick, middle: look, right:
-    // jump/action/walk/weapon buttons). Side buttons (edges only): LEFT = jump, RIGHT = action.
+    // the level, in landscape (LARA_LANDSCAPE, home button on the right). Touch: engine/src/nanotouch.h (floating stick + contextual buttons, single contact).
+    // Side buttons (edges only): LEFT = the jump-slot action, RIGHT = the action-slot action.
     Core::settings.detail.shadows   = Core::Settings::LOW;
     Core::settings.detail.water     = Core::Settings::LOW;
     Core::settings.detail.lighting  = Core::Settings::LOW;
@@ -356,7 +379,6 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
     nano_flight_commit();
     Game::init((char *)LARA_DEMO_LEVEL);
 
-    uint32_t jumpUntil = 0, actionUntil = 0;
     // Flight recorder (NanoOS SDK): status every frame, a summary every 60 frames and a
     // screenshot every 120, all readable after a freeze + reboot (hwbridge/pull_flight.py).
     uint32_t fl_frame = 0, fl_t0 = nano_app_usec(), fl_worst = 0, fl_prev = nano_app_usec();
@@ -371,17 +393,19 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
             Core::quit();
             break;
         }
-        if (in.pressed || in.moved || in.down) {
-            Input::setPos(ikTouchA, vec2((float)in.x, (float)in.y));
-            Input::setDown(ikTouchA, true);
-        } else if (in.released) {
-            Input::setDown(ikTouchA, false);
+        {
+            // Touch HUD (engine/src/nanotouch.h): move stick, contextual buttons, menu pad.
+            // one contact per finger (SDK nano_app_poll_touches, kernel API v27; one finger on older kernels)
+            nano_touch_t tc[NANO_TOUCH_MAX];
+            NanoTouch::Sample ts[NANO_TOUCH_MAX];
+            nano_app_poll_touches(tc);
+            for (int i = 0; i < NANO_TOUCH_MAX; i++) {
+                ts[i].down = tc[i].down; ts[i].pressed = tc[i].pressed; ts[i].released = tc[i].released;
+                ts[i].x = tc[i].x; ts[i].y = tc[i].y;
+            }
+            uint32_t phys = ((in.buttons & NGAME_LEFT) ? NT_PHYS_JUMP : 0u) | ((in.buttons & NGAME_RIGHT) ? NT_PHYS_ACT : 0u);
+            NanoTouch::update(ts, NANO_TOUCH_MAX, phys);
         }
-        uint32_t now = nano_app_usec();
-        if (in.buttons & NGAME_LEFT)  jumpUntil   = now + 200000u;   // button reports are edges: hold briefly
-        if (in.buttons & NGAME_RIGHT) actionUntil = now + 400000u;
-        Input::setJoyDown(0, jkX, (int32_t)(jumpUntil - now) > 0);
-        Input::setJoyDown(0, jkA, (int32_t)(actionUntil - now) > 0);
 
         nano_flight_status(fl_frame, 2, fl_user);
         if (Game::update()) {
@@ -389,12 +413,17 @@ extern "C" int nano_example_main(const struct nanoos_api *api) {
             Game::render();
             nano_flight_status(fl_frame, 4, fl_user);
             eglSwapBuffers(dpy, sfc);
+#ifdef LARA_SHOT_EVERY
+            /* diagnostic build: keep the latest view for hwbridge/pull_flight.py (~5 ms each) */
+            if (fl_frame % LARA_SHOT_EVERY == LARA_SHOT_EVERY - 1) nano_flight_screenshot();
+#endif
         }
         uint32_t now2 = nano_app_usec(), dt = now2 - fl_prev; fl_prev = now2;
         if (dt > fl_worst) fl_worst = dt;
         if (++fl_frame % 60u == 0) {
             uint32_t span = now2 - fl_t0; fl_t0 = now2;
             { uint32_t gf = 0, gs = 0, gx = 0; nano_app_gfx_stats(&gf, &gs, &gx);
+              nano_flight_log("touch maxfingers %d\n", nano_app_touch_max_seen());
               nano_flight_log("f%u avg %u us worst %u us glerr %x dips %d tris %d gpu frames %u sw %u fault %u recovered %u\n", (unsigned)fl_frame, (unsigned)(span / 60u), (unsigned)fl_worst,
                             (unsigned)fl_user[1], Core::stats.dips, Core::stats.tris, (unsigned)gf, (unsigned)gs, (unsigned)gx, (unsigned)gl2_egl_recoveries()); }
             fl_worst = 0;
