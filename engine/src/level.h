@@ -37,32 +37,35 @@ extern int loadSlot;
 
 #ifdef _OS_NANO7
 /* Nano shadow-map light box (world units; 1024 = one block) and receiver compare: see renderShadowView,
- * renderNanoShadowReceivers and shaders/shadow.glsl. Depth is 0..1 over NANO_SHADOW_DEPTH; the combiner
- * compare ramps from lit to shadowed over a quarter of that, starting (0.25 - NANO_SHADOW_OFFSET) of
- * the depth range in front of the caster. */
+ * renderNanoShadowReceivers and shaders/shadow.glsl. Depth is 0..1 over NANO_SHADOW_DEPTH. A receiver
+ * is lit where the map's depth is at least its own minus NANO_SHADOW_BIAS, and fully shadowed 1/16 of
+ * the depth range (64 units) further: a x16 per-pixel compare. */
 #ifndef NANO_SHADOW_RADIUS
 #define NANO_SHADOW_RADIUS 512.0f
 #endif
 #ifndef NANO_SHADOW_BACK
-#define NANO_SHADOW_BACK   512.0f
+#define NANO_SHADOW_BACK   448.0f  /* light box starts this far in front of the player's centre (covers the whole body) */
 #endif
 #ifndef NANO_SHADOW_DEPTH
-#define NANO_SHADOW_DEPTH  1024.0f
+#define NANO_SHADOW_DEPTH  1536.0f /* and is this deep: shadows reach DEPTH - BACK behind the player along the light */
+#endif
+#ifndef NANO_SHADOW_FADE
+#define NANO_SHADOW_FADE   0.9f    /* past this fraction of the depth range the shadow runs out (the light-distance fade comes from the shader) */
+#endif
+#ifndef NANO_SHADOW_BIAS
+#define NANO_SHADOW_BIAS   0.008f  /* fraction of the depth range (about 8 units): keeps 8-bit depth noise out of lit floors */
 #endif
 #ifndef NANO_SHADOW_OFFSET
-#define NANO_SHADOW_OFFSET 0.27f
+#define NANO_SHADOW_OFFSET (0.46875f - 0.5f * NANO_SHADOW_BIAS)  /* added to the receiver's half depth (shaders/shadow.glsl) */
 #endif
 #ifndef NANO_SHADOW_EVERY
-#define NANO_SHADOW_EVERY  2       /* render the shadow map every N frames (each update is a GPU sync point) */
+#define NANO_SHADOW_EVERY  1       /* render the shadow map every N frames */
 #endif
 #ifndef NANO_SHADOW_ROOMS
-#define NANO_SHADOW_ROOMS  1       /* 1: receivers in the player's room only; 0: every room overlapping the light box */
+#define NANO_SHADOW_ROOMS  0       /* 1: receivers in the player's room only; 0: every visible room the light box reaches */
 #endif
 #ifndef NANO_SHADOW_TILT
-#define NANO_SHADOW_TILT   1.0f    /* light direction += (0, TILT, 0): halfway to overhead for a side light */
-#endif
-#ifndef NANO_SHADOW_KEEP
-#define NANO_SHADOW_KEEP   0.5f    /* darkening: shadowed pixels keep 1 - 0.5 = 50% of their colour */
+#define NANO_SHADOW_TILT   0.0f    /* debug: light direction += (0, TILT, 0), toward overhead. 0 = the real direction from the room's main light */
 #endif
 #endif
 
@@ -124,7 +127,7 @@ struct Level : IGame {
     Shader *nanoRecvShader;
     Shader *nanoBgShader;
     mat4    nanoLightProj;
-    vec3    nanoShadowPos;
+    vec3    nanoShadowPos, nanoShadowDir;
     bool    nanoShadowValid;
 #endif
 
@@ -2668,8 +2671,12 @@ struct Level : IGame {
         Core::mLightProj = nanoLightProj;
         nanoRecvShader->setup();
         Core::mLightProj = oldLightProj;
-        // receiver depth offset (x) and darkening of shadowed pixels (y): see shaders/shadow.glsl
-        nanoRecvShader->setParam(uMaterial, vec4(NANO_SHADOW_OFFSET, NANO_SHADOW_KEEP, 0.0f, 0.0f));
+        // main light position and 1 / radius: shadows weaken with distance from the light (compose.glsl getShadow)
+        nanoRecvShader->setParam(uParam, vec4(player->mainLightPos, 1.0f / max(player->mainLightColor.w, 1.0f)));
+        // world box the light box covers: its axis from front to back, widened by the radius
+        vec3 la = nanoShadowPos - nanoShadowDir * NANO_SHADOW_BACK, lb = nanoShadowPos + nanoShadowDir * (NANO_SHADOW_DEPTH - NANO_SHADOW_BACK);
+        vec3 lmin = vec3(min(la.x, lb.x), min(la.y, lb.y), min(la.z, lb.z)) - vec3(NANO_SHADOW_RADIUS);
+        vec3 lmax = vec3(max(la.x, lb.x), max(la.y, lb.y), max(la.z, lb.z)) + vec3(NANO_SHADOW_RADIUS);
         shadow[0]->bind(sDiffuse);
         Core::setBlendMode(bmMult);
         Core::setDepthWrite(false);
@@ -2678,7 +2685,6 @@ struct Level : IGame {
 
         Basis basis;
         basis.identity();
-        float reach = NANO_SHADOW_RADIUS * 1.5f;
         for (int i = 0; i < roomsCount; i++) {
             int roomIndex = roomsList[i].index;
         #if NANO_SHADOW_ROOMS == 1
@@ -2687,11 +2693,16 @@ struct Level : IGame {
             MeshBuilder::RoomRange &range = mesh->rooms[roomIndex];
             if (!range.geometry[0].count) continue;
             const TR::Room &room = level.rooms[roomIndex];
-            // room AABB (x/z from the sector grid, y from the room's vertical extent) against the light box
+            // room AABB (x/z from the sector grid, y from the room's vertical extent; y points down) against the light box
             float x0 = float(room.info.x), z0 = float(room.info.z);
             float x1 = x0 + room.xSectors * 1024.0f, z1 = z0 + room.zSectors * 1024.0f;
-            if (nanoShadowPos.x + reach < x0 || nanoShadowPos.x - reach > x1 ||
-                nanoShadowPos.z + reach < z0 || nanoShadowPos.z - reach > z1) continue;
+            if (lmax.x < x0 || lmin.x > x1 || lmax.z < z0 || lmin.z > z1 ||
+                lmax.y < float(room.info.yTop) || lmin.y > float(room.info.yBottom)) continue;
+            // x: receiver depth offset; y: the room's ambient (what a shadowed pixel keeps, as in compose.glsl);
+            // z, w: distance fade = clamp(depth * z + w) (shaders/shadow.glsl)
+            vec3 center = room.getCenter();
+            float ambient = intensityf(room.getAmbient(int(center.x), int(center.y), int(center.z)));
+            nanoRecvShader->setParam(uMaterial, vec4(NANO_SHADOW_OFFSET, ambient, 1.0f / (1.0f - NANO_SHADOW_FADE), -NANO_SHADOW_FADE / (1.0f - NANO_SHADOW_FADE)));
             basis.pos = room.getOffset();
             Core::setBasis(&basis, 1);
             Core::mModel.setPos(basis.pos);
@@ -2937,6 +2948,7 @@ struct Level : IGame {
             Core::mView    = Core::mViewInv.inverseOrtho();
             Core::mProj    = GAPI::ortho(-NANO_SHADOW_RADIUS, NANO_SHADOW_RADIUS, -NANO_SHADOW_RADIUS, NANO_SHADOW_RADIUS, 0.0f, NANO_SHADOW_DEPTH);
             nanoShadowPos  = pos;
+            nanoShadowDir  = dir;
         }
     #else
         Core::mViewInv = mat4(player->mainLightPos, pos, vec3(0, -1, 0));
@@ -2984,7 +2996,8 @@ struct Level : IGame {
         {   // Map background = far (1.0). The clear colour does not reach an FBO on the MBX: measured
             // on the device, the cleared map read a stale grey (0x21..0x46, "nearer than Lara"), which
             // put the whole light box in shadow. Draw the background through the caster shader instead:
-            // a clip-space quad (uViewProj = identity, w = 32767) with cpos.z = 1, no depth write.
+            // a clip-space quad (uViewProj = identity, w = 32767) with cpos.z = 3, no depth write.
+            // The caster shader writes cpos.z / 4 + 1/4 (half depth), so 3 gives 1.0: beyond every receiver.
             if (!nanoBgShader) {
                 int def[1] = { SD_TYPE_SPRITE + Shader::ROOM };
                 nanoBgShader = new Shader(Core::passShadow, Shader::ROOM, def, 1);
@@ -2992,7 +3005,7 @@ struct Level : IGame {
             mat4 ident; ident.identity();
             nanoBgShader->setup();
             nanoBgShader->setParam(uViewProj, ident);
-            Basis bg; bg.identity(); bg.pos = vec3(0.0f, 0.0f, 1.0f); bg.w = 32767.0f;
+            Basis bg; bg.identity(); bg.pos = vec3(0.0f, 0.0f, 3.0f); bg.w = 32767.0f;
             Core::setBasis(&bg, 1);
             Core::setBlendMode(bmNone);
             Core::setDepthWrite(false);

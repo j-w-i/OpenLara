@@ -278,6 +278,12 @@
     #define NANO_SHADOW_SIZE     128
     #endif
     #define SHADOW_TEX_SIZE      NANO_SHADOW_SIZE   // RGBA colour-depth map (level.h renderShadowView)
+    // Most of its colour a shadowed room pixel may keep (shaders/shadow.glsl). 1.0: exactly the standard
+    // shader's rule, shadowed = min(room ambient, baked light), so a spot no brighter than the room's
+    // ambient shows no shadow at all. Lower: a shadow is always at least this visible.
+    #ifndef NANO_SHADOW_KEEP_MAX_STR
+    #define NANO_SHADOW_KEEP_MAX_STR "1.0"
+    #endif
 #else
     #define SHADOW_TEX_SIZE      2048
 #endif
